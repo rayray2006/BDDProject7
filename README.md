@@ -33,7 +33,7 @@ unless you pass `--overwrite`.
 
 | ID  | Folder name             | Owner | Description |
 |-----|-------------------------|-------|-------------|
-| 101 | Dataset101_SegRapOAR    |       | SegRap2023 Task 1, 45 OARs, 2 channels (non-contrast + contrast CT), 20 held-out test cases |
+| 101 | Dataset101_SegRapOAR    | rayray2006 | SegRap2023 Task 1, 45 OARs, 2 channels (non-contrast + contrast CT), 20 held-out test cases |
 | 102 |                         |       | _free_ |
 | 103 |                         |       | _free_ |
 | 900 | Dataset900_Toy          | everyone (local only) | Synthetic toy data from `make_toy_data.py`; never put on Drive |
@@ -70,7 +70,9 @@ Suggested ranges: 100–199 shared SegRap experiments, 200–299 personal experi
 ### Execution in Colab (compute only)
 
 1. Once: in Drive, open *Shared with me*, right-click **Biomedical Data Design**, choose **Organize → Add shortcut** and put it in *My Drive*.
-   Colab can only see the folder at `/content/drive/MyDrive/Biomedical Data Design` after you do this.
+   Why: `drive.mount()` in Colab only exposes *My Drive* (and Shared drives), not *Shared with me*. The folder is owned by
+   a teammate, so without a shortcut it does not appear under `/content/drive/MyDrive/` and the paths in `.env` don't resolve.
+   The shortcut doesn't copy anything; everyone still reads and writes the same files.
 2. Open `notebooks/colab_runner.ipynb` in Colab (File → Open notebook → GitHub) and select a GPU runtime.
 3. Run the cells in order. They:
    - mount Drive and clone the repo at your branch,
@@ -96,6 +98,15 @@ nnU-Net saves that checkpoint every 50 epochs, so a disconnect loses at most 50 
 All wrappers forward any extra flags to the underlying `nnUNetv2_*` command, and `python -m src.<step> -h` lists the options.
 
 On a SLURM cluster: `sbatch --array=0-4 scripts/run_training.sh 101` trains the 5 folds in parallel.
+
+## Where things live
+
+| What | Where |
+|------|-------|
+| Code | GitHub (this repo). Colab clones it fresh each session |
+| Raw SegRap scans | Drive: `Biomedical Data Design/SegRap2023_Training_Set_120cases/` (120 cases) |
+| nnU-Net datasets, preprocessed data, checkpoints, predictions | Drive: `Biomedical Data Design/nnunet/{nnUNet_raw,nnUNet_preprocessed,nnUNet_results}/` |
+| Your `.env` | Only in your clone/Colab session (git-ignored) |
 
 ## Data notes
 
