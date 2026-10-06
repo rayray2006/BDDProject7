@@ -1,0 +1,8 @@
+# Python 3.10+ (tested with 3.12, the Colab default).
+# torch is intentionally not pinned: Colab ships a CUDA build that must not be replaced.
+# Locally, nnunetv2 pulls in a compatible torch automatically.
+nnunetv2==2.8.1
+python-dotenv==1.2.4
+nibabel==5.4.2
+SimpleITK==2.5.6
+numpy==2.5.3
