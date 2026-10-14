@@ -1,0 +1,6 @@
+nnunetv2
+python-dotenv
+typer
+rich
+nibabel
+ipython>=8.0.0

@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.py[cod]
+.DS_Store
+.ipynb_checkpoints/
+nnUNet_raw/
+nnUNet_preprocessed/
+nnUNet_results/
+predictions*/
