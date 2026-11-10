@@ -26,7 +26,6 @@ from src.config import (
 from src.model_factory import build_model_and_optimizer
 from src.train_aim1 import compute_prompted_dice_bce_loss
 
-
 NUM_OARS = 45
 
 def validate_manifest(manifest):
@@ -191,6 +190,8 @@ def prepare_supervision_labels(
 
     # The shared loss excludes voxels labeled -1.
     supervision_labels[withheld_mask] = -1
+
+    return supervision_labels
 
 def main():
     parser = argparse.ArgumentParser(
