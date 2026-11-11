@@ -127,60 +127,35 @@ def convert_case(task) -> tuple[str, str]:
         return case_id, f"FAILED: {e!r}"
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("dataset_id", type=int, help="3-digit nnU-Net dataset ID (claim it in README.md first)")
-    ap.add_argument("--name", default="SegRapOAR", help="dataset name suffix, e.g. SegRapOAR -> Dataset101_SegRapOAR")
-    ap.add_argument("--source", type=Path, default=config.RAW_DATA_DIR, help="folder with case subfolders")
-    ap.add_argument("--channels", choices=CHANNEL_PRESETS, default="both",
-                    help="which CT(s) to use as input channels (default: both)")
-    ap.add_argument("--num-test", type=int, default=0, help="hold out this many cases into imagesTs/labelsTs")
-    ap.add_argument("--limit", type=int, help="only convert the first N cases (quick tests)")
-    ap.add_argument("--seed", type=int, default=0, help="seed for the test split")
-    ap.add_argument("--workers", type=int, default=2, help="parallel cases (each full SegRap case needs ~2 GB RAM)")
-    ap.add_argument("--overwrite", action="store_true", help="delete an existing dataset folder with this ID first")
-    args = ap.parse_args()
-
-    if not 1 <= args.dataset_id <= 999:
-        sys.exit("dataset_id must be between 1 and 999")
-    source = args.source.resolve()
-    channels = CHANNEL_PRESETS[args.channels]
-    name = f"Dataset{args.dataset_id:03d}_{args.name}"
-    config.ensure_dirs()
-
-    existing = [p for p in config.NNUNET_RAW.glob(f"Dataset{args.dataset_id:03d}_*") if p.is_dir()]
-    if existing and not args.overwrite:
+def build(dataset_id: int, name: str, source: Path, train: list[Path], test: list[Path], organs: list[str],
+          channels: list[str], workers: int, overwrite: bool, extra_json: dict | None = None) -> None:
+    """Convert the given case folders into nnUNet_raw/<name>/ (train -> imagesTr, test -> imagesTs)."""
+    existing = [p for p in config.NNUNET_RAW.glob(f"Dataset{dataset_id:03d}_*") if p.is_dir()]
+    if existing and not overwrite:
         sys.exit(f"{existing[0]} already exists. Pick another ID (see README registry) or pass --overwrite.")
     for p in existing:
         shutil.rmtree(p)
     out = config.NNUNET_RAW / name
 
-    cases = sorted(p for p in source.iterdir() if p.is_dir() and all(image_source(p, CHANNELS[c][0]) for c in channels))
-    if args.limit:
-        cases = cases[:args.limit]
-    if not cases:
-        sys.exit(f"No case folders with {[CHANNELS[c][0] for c in channels]} found in {source}")
-
-    organs = sorted({o for c in cases for o in organ_files(c)}, key=str.lower)
     label_ids = {o: i for i, o in enumerate(organs, start=1)}
     if len(label_ids) > 254:
         sys.exit("More than 254 labels do not fit in uint8")
-    for c in cases:
+    for c in train + test:
+        unknown = set(organ_files(c)) - set(organs)
+        if unknown:
+            sys.exit(f"{c.name} has masks {sorted(unknown)} that are not in the label list")
         missing = set(organs) - set(organ_files(c))
         if missing:
             print(f"warning: {c.name} has no mask for {sorted(missing)} (treated as empty)")
 
-    if args.num_test >= len(cases):
-        sys.exit(f"--num-test {args.num_test} leaves no training cases (found {len(cases)})")
-    test = set(random.Random(args.seed).sample([c.name for c in cases], args.num_test))
     for sub in ("imagesTr", "labelsTr") + (("imagesTs", "labelsTs") if test else ()):
         (out / sub).mkdir(parents=True, exist_ok=True)
-
-    print(f"{name}: {len(cases)} cases ({len(cases) - len(test)} train, {len(test)} test), "
-          f"{len(organs)} labels, channels {channels}\n  from {source}\n  to   {out}")
-    tasks = [(c, c.name, "Ts" if c.name in test else "Tr", channels, label_ids, out) for c in cases]
+    print(f"{name}: {len(train)} train, {len(test)} test, {len(organs)} labels, channels {channels}\n"
+          f"  from {source}\n  to   {out}")
+    tasks = [(c, c.name, split, channels, label_ids, out) for split, group in (("Tr", train), ("Ts", test))
+             for c in group]
     failed = []
-    with Pool(max(1, args.workers)) as pool:
+    with Pool(max(1, workers)) as pool:
         for i, (case_id, status) in enumerate(pool.imap_unordered(convert_case, tasks), 1):
             print(f"[{i}/{len(tasks)}] {case_id}: {status}", flush=True)
             if status.startswith("FAILED"):
@@ -195,12 +170,77 @@ def main() -> None:
         "channel_names": {str(i): CHANNELS[c][1] for i, c in enumerate(channels)},
         "channel_sources": {str(i): CHANNELS[c][0] for i, c in enumerate(channels)},
         "labels": {"background": 0, **label_ids},
-        "numTraining": len(cases) - len(test),
+        "numTraining": len(train),
         "file_ending": ".nii.gz",
-        "test_cases": sorted(test),
+        "training_cases": sorted(c.name for c in train),
+        "test_cases": sorted(c.name for c in test),
+        **(extra_json or {}),
     }
     (out / "dataset.json").write_text(json.dumps(dataset_json, indent=2))
-    print(f"wrote {out / 'dataset.json'}\nnext: python -m src.preprocess {args.dataset_id}")
+    print(f"wrote {out / 'dataset.json'}\nnext: python -m src.preprocess {dataset_id}")
+
+
+def from_split_file(args) -> None:
+    split = json.loads(args.split_file.read_text())
+    source = args.source.resolve()
+    if source.name != split["source"]:
+        print(f"warning: split was made from '{split['source']}', converting from '{source}'")
+    subsets = {s["name"]: s for s in split["subsets"]}
+    wanted = list(subsets) if args.subset == ["all"] else args.subset
+    unknown = set(wanted) - set(subsets)
+    if unknown:
+        sys.exit(f"unknown subset(s) {sorted(unknown)}; the split file has {list(subsets)}")
+    channels = CHANNEL_PRESETS[split["channels"]]
+    test = [source / c for c in split["test"]]
+    for key in wanted:
+        s = subsets[key]
+        name = s["dataset_name"]
+        if (config.NNUNET_RAW / name / "dataset.json").exists() and not args.overwrite:
+            print(f"{name}: already converted, skipping (use --overwrite to redo)")
+            continue
+        build(s["dataset_id"], name, source, [source / c for c in s["cases"]], test, split["organs"], channels,
+              args.workers, args.overwrite,
+              {"split_file": args.split_file.name, "subset": key, "budget": s["budget"], "repeat": s["repeat"]})
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("dataset_id", type=int, nargs="?",
+                    help="3-digit nnU-Net dataset ID (claim it in README.md first); not used with --split-file")
+    ap.add_argument("--name", default="SegRapOAR", help="dataset name suffix, e.g. SegRapOAR -> Dataset101_SegRapOAR")
+    ap.add_argument("--source", type=Path, default=config.RAW_DATA_DIR, help="folder with case subfolders")
+    ap.add_argument("--channels", choices=CHANNEL_PRESETS, default="both",
+                    help="which CT(s) to use as input channels (default: both)")
+    ap.add_argument("--num-test", type=int, default=0, help="hold out this many cases into imagesTs/labelsTs")
+    ap.add_argument("--limit", type=int, help="only convert the first N cases (quick tests)")
+    ap.add_argument("--seed", type=int, default=0, help="seed for the test split")
+    ap.add_argument("--split-file", type=Path,
+                    help="JSON from src/make_splits.py; converts the named subsets with the shared test set")
+    ap.add_argument("--subset", nargs="+", default=["all"], help="subset names from the split file (default: all)")
+    ap.add_argument("--workers", type=int, default=2, help="parallel cases (each full SegRap case needs ~2 GB RAM)")
+    ap.add_argument("--overwrite", action="store_true", help="delete an existing dataset folder with this ID first")
+    args = ap.parse_args()
+    config.ensure_dirs()
+
+    if args.split_file:
+        return from_split_file(args)
+    if args.dataset_id is None or not 1 <= args.dataset_id <= 999:
+        sys.exit("give a dataset_id between 1 and 999, or --split-file")
+
+    source = args.source.resolve()
+    channels = CHANNEL_PRESETS[args.channels]
+    cases = sorted(p for p in source.iterdir() if p.is_dir() and all(image_source(p, CHANNELS[c][0]) for c in channels))
+    if args.limit:
+        cases = cases[:args.limit]
+    if not cases:
+        sys.exit(f"No case folders with {[CHANNELS[c][0] for c in channels]} found in {source}")
+    if args.num_test >= len(cases):
+        sys.exit(f"--num-test {args.num_test} leaves no training cases (found {len(cases)})")
+    test = set(random.Random(args.seed).sample([c.name for c in cases], args.num_test))
+    organs = sorted({o for c in cases for o in organ_files(c)}, key=str.lower)
+    build(args.dataset_id, f"Dataset{args.dataset_id:03d}_{args.name}", source,
+          [c for c in cases if c.name not in test], [c for c in cases if c.name in test], organs, channels,
+          args.workers, args.overwrite)
 
 
 if __name__ == "__main__":
