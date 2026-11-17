@@ -39,6 +39,8 @@ CHANNELS = {
 }
 CHANNEL_PRESETS = {"both": ["nc", "ce"], "nc": ["nc"], "ce": ["ce"]}
 IMAGE_STEMS = {stem for stem, _ in CHANNELS.values()}
+# Tumour volumes are left out: the experiments segment the 45 organs-at-risk only.
+EXCLUDED_MASKS = {"GTVp", "GTVnd"}
 
 
 def image_source(case_dir: Path, stem: str) -> Path | None:
@@ -52,7 +54,8 @@ def organ_files(case_dir: Path) -> dict[str, Path]:
     files = {}
     for p in case_dir.glob("*.nii*"):
         name = p.name.removesuffix(".gz").removesuffix(".nii")
-        if name in IMAGE_STEMS or "(" in name:  # skip CT volumes and Drive duplicates like "Brain (1).nii.gz"
+        # skip CT volumes, tumour volumes and Drive duplicates like "Brain (1).nii.gz"
+        if name in IMAGE_STEMS or name in EXCLUDED_MASKS or "(" in name:
             continue
         files[name] = p
     return files

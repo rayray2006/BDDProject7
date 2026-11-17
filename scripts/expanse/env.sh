@@ -7,7 +7,7 @@
 #   $WORK/nnunet/{nnUNet_raw,nnUNet_preprocessed,nnUNet_results}/
 #   $WORK/conda/                        Python environment made by setup_env.sh
 
-EXPANSE_PROJECT="${EXPANSE_PROJECT:-CHANGE_ME}"                       # EDIT: allocation/project name, e.g. abc123
+EXPANSE_PROJECT="${EXPANSE_PROJECT:-jhu159}"                       # EDIT: allocation/project name, e.g. abc123
 WORK="${WORK:-/expanse/lustre/projects/${EXPANSE_PROJECT}/${USER}}"   # EDIT only if your project space differs
 
 export WORK
