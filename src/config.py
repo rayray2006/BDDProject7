@@ -42,6 +42,10 @@ NNUNET_RESULTS = _get("nnUNet_results", NNUNET_ROOT / "nnUNet_results")
 os.environ["nnUNet_raw"] = str(NNUNET_RAW)
 os.environ["nnUNet_preprocessed"] = str(NNUNET_PREPROCESSED)
 os.environ["nnUNet_results"] = str(NNUNET_RESULTS)
+# Our own trainer classes (nnunet_trainers/), found by nnU-Net for both training and prediction.
+TRAINERS_DIR = PROJECT_ROOT / "nnunet_trainers"
+_ext = [p for p in os.environ.get("nnUNet_extTrainer", "").split(os.pathsep) if p]
+os.environ["nnUNet_extTrainer"] = os.pathsep.join(_ext + [str(TRAINERS_DIR)] * (str(TRAINERS_DIR) not in _ext))
 
 DEFAULT_TRAINER = os.environ.get("NNUNET_TRAINER", "nnUNetTrainer")
 DEFAULT_PLANS = os.environ.get("NNUNET_PLANS", "nnUNetPlans")

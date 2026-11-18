@@ -39,8 +39,8 @@ Tumour masks (GTVp, GTVnd) are copied but ignored by `prepare_dataset.py`: only 
 |------|---------|------|
 | 1. GPU check | `sbatch -A $EXPANSE_PROJECT scripts/expanse/check_gpu.sbatch` | ~0.2 GPU h |
 | 2. Split + convert + preprocess the 5- and 10-patient subsets | `sbatch -A $EXPANSE_PROJECT scripts/expanse/prepare.sbatch` | CPU hours only |
-| 3. Timing test (5 epochs) | `sbatch -A $EXPANSE_PROJECT --time=01:00:00 scripts/expanse/train.sbatch 110 nnUNetTrainer_5epochs` | <1 GPU h |
-| 4. 5-patient model, 250 epochs | `sbatch -A $EXPANSE_PROJECT scripts/expanse/train.sbatch 110` | ~10–15 GPU h (step 3 gives the real number) |
+| 3. Timing test (5 epochs + test prediction) | `sbatch -A $EXPANSE_PROJECT --time=03:00:00 scripts/expanse/train.sbatch 110 nnUNetTrainerNoVal_5epochs` | 1–3 GPU h |
+| 4. 5-patient model, 250 epochs | `sbatch -A $EXPANSE_PROJECT scripts/expanse/train.sbatch 110` | ~5 GPU h training (69.5 s/epoch) + test prediction |
 | 5. 10-patient model, 250 epochs | `sbatch -A $EXPANSE_PROJECT scripts/expanse/train.sbatch 111` | same as step 4 |
 
 Dataset IDs come from `splits/segrap_exp1.json` (written by step 2; commit it). With the default split,
@@ -48,6 +48,14 @@ Dataset IDs come from `splits/segrap_exp1.json` (written by step 2; commit it). 
 
 Each training job ends by predicting the 20 shared test cases and writing
 `nnUNet_results/<dataset>/predictions/<model>_folds_all/dice.csv` (Dice, IoU, HD95, missed organs).
+
+Two departures from plain nnU-Net, both because SegRap scans are 1024 x 1024 with 45 organs:
+
+- The trainers are `nnUNetTrainerNoVal_*` (in `nnunet_trainers/`, found through `nnUNet_extTrainer`, which
+  `src/config.py` sets). Training is unchanged; they skip nnU-Net's end-of-training validation, which with
+  fold `all` re-predicts the training cases and ran out of memory in the first timing test.
+- Test prediction runs `src/evaluate.py --low-memory`: one case at a time, network on the GPU, logits summed
+  in RAM. Same settings as `nnUNetv2_predict` (mirroring TTA, Gaussian sliding window, step 0.5).
 
 ## Useful commands
 

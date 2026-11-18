@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # GPU job: train one nnU-Net model on one subset (fold "all" = every case in the subset), then
 # predict the 20 shared test cases and write Dice + HD95. One V100 on the gpu-shared partition.
+#
+# The trainers are our nnUNetTrainerNoVal_* variants (nnunet_trainers/): identical training, but they
+# skip nnU-Net's end-of-training "validation", which with fold "all" just re-predicts the training cases.
+# Test prediction uses evaluate.py --low-memory: one case at a time with the logits in RAM, because a
+# 1024x1024 SegRap scan with 45 organs needs ~15 GB of logits and does not fit next to the network.
 # Submit from the repo root:
 #
-#   sbatch -A $EXPANSE_PROJECT scripts/expanse/train.sbatch 110                            # 250 epochs
-#   sbatch -A $EXPANSE_PROJECT --time=01:00:00 scripts/expanse/train.sbatch 110 nnUNetTrainer_5epochs   # timing test
+#   sbatch -A $EXPANSE_PROJECT scripts/expanse/train.sbatch 110                                    # 250 epochs
+#   sbatch -A $EXPANSE_PROJECT --time=03:00:00 scripts/expanse/train.sbatch 110 nnUNetTrainerNoVal_5epochs  # timing test
 #
 # Cost: GPU hours = wall-clock hours (1 GPU). The preprocessed data is copied to the node's local
 # NVMe first (faster than reading Lustre every iteration); checkpoints and results stay on Lustre.
 # If the job hits the time limit, submit the same command again: training resumes from
-# checkpoint_latest.pth (written every 50 epochs).
+# checkpoint_latest.pth (written every 50 epochs), and test cases already predicted are skipped.
 #
 #SBATCH --job-name=nnunet-train
 #SBATCH --partition=gpu-shared
@@ -25,7 +30,7 @@
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 DATASET_ID="${1:?usage: train.sbatch DATASET_ID [TRAINER]}"
-TRAINER="${2:-nnUNetTrainer_250epochs}"
+TRAINER="${2:-nnUNetTrainerNoVal_250epochs}"
 source scripts/expanse/env.sh
 activate_env
 
@@ -47,5 +52,7 @@ nvidia-smi --query-gpu=name,memory.total --format=csv
 start=$(date +%s)
 python -m src.train "$DATASET_ID" all -tr "$TRAINER" -device cuda
 echo "training wall time: $(( ($(date +%s) - start) / 60 )) min"
-python -m src.evaluate "$DATASET_ID" -f all -tr "$TRAINER" -device cuda -np 8
+start=$(date +%s)
+python -m src.evaluate "$DATASET_ID" -f all -tr "$TRAINER" -device cuda -np 8 --low-memory
+echo "test prediction + metrics wall time: $(( ($(date +%s) - start) / 60 )) min"
 nvidia-smi --query-gpu=memory.used --format=csv || true

@@ -34,8 +34,10 @@ set -u
 activate_env
 
 pip install --upgrade pip
-pip install "$TORCH_SPEC" --index-url "$TORCH_INDEX"
-pip install -r requirements.txt          # nnunetv2 keeps the torch installed above
+# torchvision must come from the same index as torch: the PyPI build is compiled against a different
+# torch and fails at import with "operator torchvision::nms does not exist".
+pip install "$TORCH_SPEC" torchvision --index-url "$TORCH_INDEX"
+pip install -r requirements.txt          # nnunetv2 keeps the torch and torchvision installed above
 
 python - <<'EOF'
 import torch, nnunetv2

@@ -34,6 +34,31 @@ def find_postprocessing(model: Path, dataset_id: int, args) -> Path:
     return pkl
 
 
+def predict_low_memory(model: Path, images: Path, out: Path, args) -> None:
+    """Same prediction as nnUNetv2_predict (TTA, Gaussian sliding window, step 0.5), one case at a time.
+
+    nnUNetv2_predict keeps several cases in flight in worker processes and first tries to hold the full
+    logits on the GPU; for SegRap that ran out of GPU memory and then of the job's 92 GB of RAM.
+    Here only one case's logits exist at a time, and they are accumulated in RAM from the start.
+    Cases that already have a prediction in `out` are skipped, so a re-run continues where it stopped.
+    """
+    import time
+
+    import torch
+    from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+
+    print(f"low-memory prediction: {images} -> {out}", flush=True)
+    out.mkdir(parents=True, exist_ok=True)
+    predictor = nnUNetPredictor(tile_step_size=0.5, use_gaussian=True, use_mirroring=True,
+                                perform_everything_on_device=False, device=torch.device(args.device),
+                                allow_tqdm=False)
+    folds = tuple(f if f == "all" else int(f) for f in args.folds)
+    predictor.initialize_from_trained_model_folder(str(model), use_folds=folds, checkpoint_name=args.checkpoint)
+    start = time.time()
+    predictor.predict_from_files_sequential(str(images), str(out), save_probabilities=False, overwrite=False)
+    print(f"prediction wall time: {(time.time() - start) / 60:.1f} min", flush=True)
+
+
 def report(summary_file: Path, dataset_json: Path, out_csv: Path, hd: dict | None = None) -> None:
     summary = json.loads(summary_file.read_text())
     names = {str(v): k for k, v in json.loads(dataset_json.read_text())["labels"].items()}
@@ -75,6 +100,10 @@ def main() -> None:
     ap.add_argument("--no-metrics", action="store_true", help="only predict (e.g. unlabeled scans)")
     ap.add_argument("--no-hd95", action="store_true", help="skip the HD95 computation")
     ap.add_argument("-np", "--num-processes", type=int, default=2, help="workers for postprocessing and metrics")
+    ap.add_argument("--low-memory", action="store_true",
+                    help="predict one case at a time in this process and add up the sliding-window logits in CPU "
+                         "memory (the network still runs on the GPU). Needed for large scans with many organs, "
+                         "e.g. SegRap at 1024x1024 with 45 labels, whose logits do not fit on a 32 GB V100.")
     args, extra = ap.parse_known_args()
 
     name = config.dataset_name(args.dataset_id)
@@ -91,9 +120,12 @@ def main() -> None:
         missing = [f for f in args.folds if not (model / f"fold_{f}" / args.checkpoint).exists()]
         if missing:
             sys.exit(f"No {args.checkpoint} for fold(s) {missing} in {model}. Train them first or pass -f.")
-        config.run(["nnUNetv2_predict", "-i", images, "-o", out, "-d", args.dataset_id, "-c", args.configuration,
-                    "-tr", args.trainer, "-p", args.plans, "-f", *args.folds, "-chk", args.checkpoint,
-                    "-device", args.device, "--continue_prediction"] + extra)
+        if args.low_memory:
+            predict_low_memory(model, images, out, args)
+        else:
+            config.run(["nnUNetv2_predict", "-i", images, "-o", out, "-d", args.dataset_id, "-c", args.configuration,
+                        "-tr", args.trainer, "-p", args.plans, "-f", *args.folds, "-chk", args.checkpoint,
+                        "-device", args.device, "--continue_prediction"] + extra)
 
     if args.postprocess:
         pkl = find_postprocessing(model, args.dataset_id, args)
