@@ -1,0 +1,26 @@
+# Local configuration
+.env
+
+# Data, nnU-Net workspaces, and checkpoints
+data/
+nnUNet_raw/
+nnUNet_preprocessed/
+nnUNet_results/
+*.nii
+*.nii.gz
+*.dcm
+*.pth
+*.npz
+*.b2nd
+*.pkl
+
+# Python / tooling
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+slurm-*.out
+logs/
