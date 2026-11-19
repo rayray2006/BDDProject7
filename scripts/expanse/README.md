@@ -55,7 +55,12 @@ Two departures from plain nnU-Net, both because SegRap scans are 1024 x 1024 wit
   `src/config.py` sets). Training is unchanged; they skip nnU-Net's end-of-training validation, which with
   fold `all` re-predicts the training cases and ran out of memory in the first timing test.
 - Test prediction runs `src/evaluate.py --low-memory`: one case at a time, network on the GPU, logits summed
-  in RAM. Same settings as `nnUNetv2_predict` (mirroring TTA, Gaussian sliding window, step 0.5).
+  in RAM. Same settings as `nnUNetv2_predict` (mirroring TTA, Gaussian sliding window, step 0.5). The
+  logits are then resized back to the original grid one organ channel at a time with a running argmax
+  (nnU-Net resizes all 46 channels at once in float64, ~60 GB per scan); the segmentation is identical.
+
+If training finished but test prediction did not, predict on its own (cases already done are skipped):
+`sbatch -A $EXPANSE_PROJECT --time=04:00:00 scripts/expanse/predict.sbatch 110 nnUNetTrainerNoVal_5epochs`.
 
 ## Useful commands
 

@@ -4,8 +4,9 @@
 #
 # The trainers are our nnUNetTrainerNoVal_* variants (nnunet_trainers/): identical training, but they
 # skip nnU-Net's end-of-training "validation", which with fold "all" just re-predicts the training cases.
-# Test prediction uses evaluate.py --low-memory: one case at a time with the logits in RAM, because a
-# 1024x1024 SegRap scan with 45 organs needs ~15 GB of logits and does not fit next to the network.
+# Test prediction uses evaluate.py --low-memory: one case at a time with the logits in RAM, resized back to
+# the scan one organ channel at a time, because a 1024x1024 SegRap scan with 45 organs needs ~15 GB of
+# logits (and nnU-Net's all-channel float64 resize ~60 GB more). predict.sbatch reruns only this part.
 # Submit from the repo root:
 #
 #   sbatch -A $EXPANSE_PROJECT scripts/expanse/train.sbatch 110                                    # 250 epochs

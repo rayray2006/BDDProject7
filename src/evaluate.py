@@ -34,19 +34,82 @@ def find_postprocessing(model: Path, dataset_id: int, args) -> Path:
     return pkl
 
 
+def export_low_memory(predicted_logits, properties_dict: dict, configuration_manager, plans_manager,
+                      dataset_json_dict_or_file, output_file_truncated: str, save_probabilities: bool = False,
+                      num_threads_torch: int = 8) -> None:
+    """Drop-in for nnU-Net's export_prediction_from_logits that resamples one channel at a time.
+
+    nnU-Net resamples all channels' logits back to the original grid at once, and its resampler first
+    casts them to float64: for SegRap (46 channels, ~1024 x 1024 in-plane) that alone is ~60 GB, on top
+    of the logits, and job 55852587 was killed at 95 GB. nnU-Net's resampler treats each channel on its
+    own and the segmentation is the argmax over channels, so resampling channel by channel and keeping a
+    running maximum gives the same segmentation (ties go to the lower label, as with argmax) with only one
+    channel in float64 at a time.
+    """
+    import numpy as np
+    import torch
+    from acvl_utils.cropping_and_padding.bounding_boxes import insert_crop_into_image
+    from batchgenerators.utilities.file_and_folder_operations import load_json
+    from nnunetv2.inference.export_prediction import export_prediction_from_logits
+
+    dataset_json = load_json(dataset_json_dict_or_file) if isinstance(dataset_json_dict_or_file, str) \
+        else dataset_json_dict_or_file
+    label_manager = plans_manager.get_label_manager(dataset_json)
+    if save_probabilities or label_manager.has_regions:  # not our case; keep nnU-Net's own path
+        return export_prediction_from_logits(predicted_logits, properties_dict, configuration_manager,
+                                             plans_manager, dataset_json, output_file_truncated,
+                                             save_probabilities, num_threads_torch)
+
+    old_threads = torch.get_num_threads()
+    torch.set_num_threads(num_threads_torch)
+    # same target shape and spacings as convert_predicted_logits_to_segmentation_with_correct_shape
+    shape = properties_dict['shape_after_cropping_and_before_resampling']
+    spacing_transposed = [properties_dict['spacing'][i] for i in plans_manager.transpose_forward]
+    current_spacing = configuration_manager.spacing if len(configuration_manager.spacing) == len(shape) \
+        else [spacing_transposed[0], *configuration_manager.spacing]
+    logits = predicted_logits.numpy() if isinstance(predicted_logits, torch.Tensor) else predicted_logits
+
+    best = segmentation = None
+    for c in range(logits.shape[0]):
+        channel = configuration_manager.resampling_fn_probabilities(logits[c:c + 1], shape, current_spacing,
+                                                                    spacing_transposed)[0]
+        if best is None:
+            best = np.array(channel, copy=True)
+            segmentation = np.zeros(best.shape, dtype=np.uint8 if logits.shape[0] < 256 else np.uint16)
+        else:
+            better = channel > best
+            segmentation[better] = c
+            best[better] = channel[better]
+        del channel
+    del best
+
+    # revert cropping and transpose, then write, exactly as nnU-Net does
+    full = np.zeros(properties_dict['shape_before_cropping'],
+                    dtype=np.uint8 if len(label_manager.foreground_labels) < 255 else np.uint16)
+    full = insert_crop_into_image(full, segmentation, properties_dict['bbox_used_for_cropping'])
+    full = full.transpose(plans_manager.transpose_backward)
+    torch.set_num_threads(old_threads)
+    rw = plans_manager.image_reader_writer_class()
+    rw.write_seg(full, output_file_truncated + dataset_json['file_ending'], properties_dict)
+
+
 def predict_low_memory(model: Path, images: Path, out: Path, args) -> None:
     """Same prediction as nnUNetv2_predict (TTA, Gaussian sliding window, step 0.5), one case at a time.
 
     nnUNetv2_predict keeps several cases in flight in worker processes and first tries to hold the full
     logits on the GPU; for SegRap that ran out of GPU memory and then of the job's 92 GB of RAM.
-    Here only one case's logits exist at a time, and they are accumulated in RAM from the start.
+    Here only one case's logits exist at a time, they are accumulated in RAM from the start, and they are
+    resampled to the original grid one channel at a time (export_low_memory).
     Cases that already have a prediction in `out` are skipped, so a re-run continues where it stopped.
     """
     import time
 
     import torch
+    from nnunetv2.inference import predict_from_raw_data
     from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 
+    # predict_from_files_sequential looks this name up in its own module when it saves each case
+    predict_from_raw_data.export_prediction_from_logits = export_low_memory
     print(f"low-memory prediction: {images} -> {out}", flush=True)
     out.mkdir(parents=True, exist_ok=True)
     predictor = nnUNetPredictor(tile_step_size=0.5, use_gaussian=True, use_mirroring=True,
